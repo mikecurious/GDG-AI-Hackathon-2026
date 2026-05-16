@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+data/raw/*.pdf
+data/analysis/
+data/gazette/
+data/manifests/
+notebooks/.ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/

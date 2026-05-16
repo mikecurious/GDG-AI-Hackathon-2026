@@ -1,0 +1,15 @@
+[
+  {"name": "gazette_number", "type": "STRING", "mode": "REQUIRED"},
+  {"name": "gazette_date", "type": "DATE", "mode": "NULLABLE"},
+  {"name": "notice_number", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "notice_title", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "affected_county", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "affected_vote_code", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "amendment_type", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "original_amount", "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "revised_amount", "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "change_amount", "type": "FLOAT64", "mode": "NULLABLE"},
+  {"name": "legal_reference", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "source_url", "type": "STRING", "mode": "NULLABLE"},
+  {"name": "extracted_at", "type": "TIMESTAMP", "mode": "REQUIRED"}
+]

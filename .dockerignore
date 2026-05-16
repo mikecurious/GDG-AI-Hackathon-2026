@@ -1,0 +1,11 @@
+data/raw/*.pdf
+data/analysis/
+data/gazette/
+__pycache__/
+*.pyc
+.env
+.git
+notebooks/
+tests/
+*.docx
+implementation_plan.md
