@@ -6,6 +6,7 @@ Usage:
     python src/pdf_to_bq.py --pdf data/raw/nairobi_itemized_estimates_2025_2026.pdf --pages 1-50
 """
 import argparse
+import base64
 import json
 import logging
 import os
@@ -25,7 +26,7 @@ log = logging.getLogger(__name__)
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "gdg-ai-2026-496507")
 DATASET_ID = os.getenv("BQ_DATASET", "county_budget")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")  # 1500 req/day free tier
 LOCATION = os.getenv("GCP_REGION", "us-central1")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
@@ -69,7 +70,7 @@ def extract_with_gemini(client: genai.Client, pdf_path: Path, page_num: int) -> 
                     {
                         "inline_data": {
                             "mime_type": "image/png",
-                            "data": img_bytes,
+                            "data": base64.b64encode(img_bytes).decode(),
                         }
                     },
                 ]
@@ -137,8 +138,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Extract budget data from PDF into BigQuery")
     parser.add_argument("--pdf", required=True, help="Path to PDF file")
     parser.add_argument("--pages", default="", help="Page range e.g. 1-50 or 1,5,10-20")
+    parser.add_argument("--model", default=GEMINI_MODEL, help="Gemini model ID (default: gemini-1.5-flash)")
     parser.add_argument("--dry-run", action="store_true", help="Extract but don't insert to BQ")
     args = parser.parse_args()
+    global GEMINI_MODEL
+    GEMINI_MODEL = args.model
 
     pdf_path = Path(args.pdf)
     doc = fitz.open(str(pdf_path))
