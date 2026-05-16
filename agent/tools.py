@@ -26,7 +26,36 @@ CELCOM_SHORTCODE = os.getenv("CELCOM_AFRICA_SHORTCODE", "WATCHDOG")
 CELCOM_SMS_ENDPOINT = "https://isms.celcomafrica.com/api/services/sendsms/"
 
 RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
+# Cloud Run stores PDFs under /tmp since the container fs is ephemeral
+TMP_RAW_DIR = Path("/tmp/data/raw")
 DEFAULT_PDF = "nairobi_itemized_estimates_2025_2026.pdf"
+
+
+def send_quick_sms(phone: str, message: str) -> bool:
+    """Send a raw SMS via Celcom. Returns True on success. For internal use."""
+    if not (CELCOM_API_KEY and CELCOM_PARTNER_ID):
+        log.info("[DEMO] SMS to %s: %s", phone, message[:80])
+        return False
+    mobile = _format_phone(phone)
+    payload = {
+        "apikey": CELCOM_API_KEY,
+        "partnerID": CELCOM_PARTNER_ID,
+        "message": quote(message[:160]),
+        "shortcode": CELCOM_SHORTCODE,
+        "mobile": mobile,
+    }
+    try:
+        resp = requests.post(CELCOM_SMS_ENDPOINT, json=payload, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        responses = data.get("responses", [])
+        ok = bool(responses and responses[0].get("response-code") == 200)
+        if ok:
+            log.info("Quick SMS sent to %s", mobile)
+        return ok
+    except Exception as exc:
+        log.error("Quick SMS failed to %s: %s", mobile, exc)
+        return False
 
 _genai_client: genai.Client | None = None
 _bq_client: bigquery.Client | None = None
@@ -67,9 +96,15 @@ def _get_or_upload_pdf(filename: str = DEFAULT_PDF) -> str:
     if filename in _file_uri_cache:
         return _file_uri_cache[filename]
 
+    # Check local data/raw/, then /tmp (Cloud Run)
     pdf_path = RAW_DIR / filename
     if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF not found: {pdf_path}. Run src/fetch_county_budgets.py first.")
+        pdf_path = TMP_RAW_DIR / filename
+    if not pdf_path.exists():
+        raise FileNotFoundError(
+            f"Budget PDF not available on this instance. "
+            f"The agent will answer from BigQuery data only."
+        )
 
     client = _get_genai()
     log.info("Uploading %s to Gemini File API ...", filename)

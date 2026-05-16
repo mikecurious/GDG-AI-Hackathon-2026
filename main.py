@@ -35,16 +35,7 @@ NAIROBI_WARDS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from agent.tools import _get_bq, PROJECT_ID, DATASET_ID
     log.info("County Budget Watchdog starting...")
-    try:
-        bq = _get_bq()
-        bq.create_table(
-            f"{PROJECT_ID}.{DATASET_ID}.subscribers",
-            exists_ok=True,
-        )
-    except Exception:
-        pass
     yield
     log.info("Shutting down.")
 
@@ -67,12 +58,14 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
+    phone_number: str | None = None  # if set, reply is also sent via SMS
 
 
 class ChatResponse(BaseModel):
     session_id: str
     reply: str
     tool_calls: list[str] = []
+    sms_sent: bool = False
 
 
 class SubscribeRequest(BaseModel):
@@ -175,12 +168,30 @@ async def budget_stats():
         return {"total_budget_kes": 48986600000, "departments": 12, "line_items": 0, "programmes": 0, "fiscal_year": "2025/2026"}
 
 
+def _sms_summary(reply: str, question: str) -> str:
+    """Trim agent reply to 155 chars for SMS, preserving whole sentences."""
+    prefix = "BudgetWatchdog: "
+    budget = 160 - len(prefix)
+    text = reply.strip().replace("\n", " ")
+    if len(text) <= budget:
+        return prefix + text
+    # Cut at the last sentence boundary within budget
+    cut = text[:budget]
+    last_stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if last_stop > 60:
+        cut = cut[: last_stop + 1]
+    else:
+        cut = cut[:budget - 3] + "..."
+    return prefix + cut
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
     from google.genai import types as genai_types
     from agent.adk_setup import root_agent
+    from agent.tools import send_quick_sms
 
     session_id = req.session_id or str(uuid.uuid4())
 
@@ -224,10 +235,19 @@ async def chat(req: ChatRequest):
         log.error("Agent error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
+    final_reply = final_reply or "I could not generate a response. Please try again."
+
+    # Auto-send SMS if caller provided a phone number
+    sms_sent = False
+    if req.phone_number and final_reply:
+        sms_text = _sms_summary(final_reply, req.message)
+        sms_sent = send_quick_sms(req.phone_number, sms_text)
+
     return ChatResponse(
         session_id=session_id,
-        reply=final_reply or "I could not generate a response. Please try again.",
+        reply=final_reply,
         tool_calls=tool_calls_made,
+        sms_sent=sms_sent,
     )
 
 
@@ -400,8 +420,15 @@ nav {
 }
 .chip:hover { background: var(--green-100); border-color: var(--green-400); }
 
+/* phone bar */
+.chat-footer { padding: .875rem 1.25rem; border-top: 1px solid var(--gray-200); display: flex; flex-direction: column; gap: .5rem; }
+.phone-bar { display: flex; align-items: center; gap: .5rem; background: var(--green-50); border: 1px solid var(--green-100); border-radius: 8px; padding: .35rem .75rem; }
+.phone-icon { font-size: .95rem; flex-shrink: 0; }
+.phone-bar input { flex: 1; border: none; background: transparent; font-size: .8rem; outline: none; color: var(--gray-700); font-family: inherit; }
+.phone-bar input::placeholder { color: var(--gray-500); }
+.sms-ind { font-size: .72rem; color: var(--green-600); font-weight: 700; white-space: nowrap; }
+
 /* input row */
-.chat-footer { padding: .875rem 1.25rem; border-top: 1px solid var(--gray-200); }
 .input-row { display: flex; gap: .5rem; }
 .input-row input {
   flex: 1; padding: .65rem 1rem;
@@ -542,6 +569,11 @@ Try one of the suggestions below, or ask your own question in English or Swahili
     </div>
 
     <div class="chat-footer">
+      <div class="phone-bar">
+        <span class="phone-icon">&#128241;</span>
+        <input id="phone-input" type="tel" placeholder="Your phone (e.g. 0712345678) — get answers via SMS too">
+        <span id="sms-indicator" class="sms-ind" style="display:none">SMS sent &#10003;</span>
+      </div>
       <div class="input-row">
         <input id="msg-input" type="text" placeholder="Ask about the Nairobi County budget..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){sendMsg();event.preventDefault()}">
         <button id="send-btn" onclick="sendMsg()">
@@ -732,10 +764,13 @@ async function sendMsg() {
   if (sending) return;
   const input = document.getElementById('msg-input');
   const btn   = document.getElementById('send-btn');
+  const phone = document.getElementById('phone-input').value.trim();
+  const smsInd = document.getElementById('sms-indicator');
   const text  = input.value.trim();
   if (!text) return;
 
   input.value = '';
+  smsInd.style.display = 'none';
   sending = true;
   btn.disabled = true;
 
@@ -744,19 +779,30 @@ async function sendMsg() {
   const typing = addTyping();
 
   try {
+    const body = {message: text, session_id: sessionId};
+    if (phone) body.phone_number = phone;
+
     const res  = await fetch('/chat', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({message: text, session_id: sessionId})
+      body: JSON.stringify(body)
     });
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({detail:'Server error'}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
     const data = await res.json();
     sessionId = data.session_id;
     typing.remove();
     addMsg('agent', data.reply, data.tool_calls);
+    if (data.sms_sent) {
+      smsInd.style.display = 'inline';
+      setTimeout(()=>{ smsInd.style.display='none'; }, 4000);
+    }
     loadStats();
   } catch(e) {
     typing.remove();
-    addMsg('agent', 'Sorry, something went wrong. Please try again.');
+    addMsg('agent', 'Error: ' + e.message + '\n\nPlease try again.');
   } finally {
     sending = false;
     btn.disabled = false;
